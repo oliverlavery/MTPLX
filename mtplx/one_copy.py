@@ -152,7 +152,11 @@ def _pending_layers(cache: Any, rows: int) -> list[Any]:
     entries = _resizable(cache)
     if entries is None:
         raise ValueError("this cache has a QSA layer that cannot be resized in place")
-    return [entry for entry in entries if _layer_bytes(entry, rows)[0] > 0]
+    return [
+        entry
+        for entry in entries
+        if (lb := _layer_bytes(entry, rows)) is not None and lb[0] > 0
+    ]
 
 
 def resize_bill(cache: Any, rows: int) -> int | None:
@@ -171,7 +175,13 @@ def resize_bill(cache: Any, rows: int) -> int | None:
         return None
     gained = peak = 0
     for entry in entries:
-        new, old = _layer_bytes(entry, rows)
+        layer = _layer_bytes(entry, rows)
+        if layer is None:
+            # A held bank entry owns rows the target would cut: the layers
+            # cannot all take ``rows`` in place, so the bank copies instead
+            # (the same fallback a promoted bank or a missing buffer takes).
+            return None
+        new, old = layer
         peak = max(peak, gained + new)
         gained += new - old
     return peak
@@ -220,11 +230,20 @@ def _resized_buffers(entry: Any, rows: int) -> list[tuple[str, Any, int, int]]:
     return resized
 
 
-def _layer_bytes(entry: Any, rows: int) -> tuple[int, int]:
-    """(new, old) bytes of the buffers resizing ``entry`` to ``rows`` replaces."""
+def _layer_bytes(entry: Any, rows: int) -> tuple[int, int] | None:
+    """(new, old) bytes of the buffers resizing ``entry`` to ``rows`` replaces.
 
+    None when the resize would cut into rows the layer holds (a bank entry
+    from an earlier, longer conversation): the layer cannot take ``rows``
+    in place, and the caller falls back to copying instead of raising.
+    """
+
+    try:
+        resized = _resized_buffers(entry, rows)
+    except ValueError:
+        return None
     new = old = 0
-    for _name, buffer, axis, target in _resized_buffers(entry, rows):
+    for _name, buffer, axis, target in resized:
         row_bytes = int(buffer.dtype.size)
         for dim, extent in enumerate(buffer.shape):
             if dim != axis:
