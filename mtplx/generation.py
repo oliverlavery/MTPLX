@@ -904,17 +904,6 @@ def _qwen4_fixed_m4_layer_fits(
     return False
 
 
-def _is_qsa_hold_cut(exc: Exception) -> bool:
-    """A QSA resize that would cut rows a held bank entry owns.
-
-    The entry belongs to a previous session the bank still holds; the new
-    request must not fail the lane over it. Degrading to the eager verifier
-    (as a refused layer does) lets the request proceed and the stale entry
-    age out of the bank.
-    """
-    return isinstance(exc, ValueError) and "would cut them" in str(exc)
-
-
 def _qwen4_fixed_m4_resize_held(
     rt: Any, cache: Any, plan: FixedM4CapacityPlan, receipt: dict, *,
     session_bank: Any | None, protect_ids: Sequence[int],
@@ -947,7 +936,7 @@ def _qwen4_fixed_m4_resize_held(
         # leaves that layer as it was: the request answers on the eager
         # verifier, as a refused layer does. Anything else is not the
         # resize's to absorb.
-        if not is_allocation_failure(exc) and not _is_qsa_hold_cut(exc):
+        if not is_allocation_failure(exc):
             raise
         failure = f"{type(exc).__name__}: {exc}"
     if failure is not None:
